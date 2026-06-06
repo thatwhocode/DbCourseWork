@@ -149,8 +149,7 @@ public partial class BarDbContext : DbContext
 
             entity.Property(e => e.OrderId).HasColumnName("Order_id");
             entity.Property(e => e.IsCompleted).HasColumnName("Is_completed");
-            entity.Property(e => e.OrderDate)
-                .HasColumnType("datetime")
+            entity.Property(e => e.OrderDate).HasDefaultValueSql("GETDATE()")
                 .HasColumnName("Order_date");
             entity.Property(e => e.StaffId).HasColumnName("Staff_id");
             entity.Property(e => e.TableNumber).HasColumnName("Table_number");

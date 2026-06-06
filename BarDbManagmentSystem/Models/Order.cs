@@ -9,7 +9,7 @@ public partial class Order
 
     public int? StaffId { get; set; }
 
-    public DateTime OrderDate { get; set; }
+    public DateTime OrderDate { get; set; } = DateTime.Now;
 
     public int TableNumber { get; set; }
 

@@ -5,7 +5,13 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:BarDbManagmentSystem"
         mc:Ignorable="d"
-        Title="MainWindow" Height="1080" Width="1920">
+        Title="MainWindow"
+        Width="1280"
+        Height="720"
+        WindowStyle="SingleBorderWindow"
+        ResizeMode="CanResize"
+        ShowInTaskbar="True"
+        WindowStartupLocation="CenterScreen">
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="250"/>
@@ -29,7 +35,7 @@
           Background="#252526" RowBackground="#2D2D30" AlternatingRowBackground="#333334" 
           BorderThickness="1" BorderBrush="#3F3F46" HorizontalGridLinesBrush="#3F3F46" 
           VerticalGridLinesBrush="#3F3F46" GridLinesVisibility="All"
-          FontSize="14" FontFamily="Segoe UI" AutoGeneratingColumn="DynamicDataGrid_AutoGeneratingColumn">
+          FontSize="14" FontFamily="Segoe UI" AutoGeneratingColumn="DynamicDataGrid_AutoGeneratingColumn" CanUserAddRows="False">
 
                 <DataGrid.Resources>
                     <Style TargetType="TextBlock">
