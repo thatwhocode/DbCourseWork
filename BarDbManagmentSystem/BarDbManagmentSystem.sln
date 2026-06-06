@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.37314.3 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BarDbManagmentSystem", "BarDbManagmentSystem.csproj", "{A53D9DBF-645B-4A97-A9A9-F7DB411D074A}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A53D9DBF-645B-4A97-A9A9-F7DB411D074A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A53D9DBF-645B-4A97-A9A9-F7DB411D074A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A53D9DBF-645B-4A97-A9A9-F7DB411D074A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A53D9DBF-645B-4A97-A9A9-F7DB411D074A}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {81C39932-30E2-4C6D-8D48-7810ABB65309}
+	EndGlobalSection
+EndGlobal
