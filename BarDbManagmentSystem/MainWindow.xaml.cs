@@ -21,6 +21,8 @@ namespace BarDbManagmentSystem
         private object? _currentDBSet;
         private Type? _currentModelType;
         private readonly BarDbContext _context;
+
+
         public MainWindow()
         {
 
@@ -90,101 +92,20 @@ namespace BarDbManagmentSystem
             try
             {
                 _context.SaveChanges();
-                MessageBox.Show("Зміни збережено!", "Успіх", MessageBoxButton.OK, MessageBoxImage.Information);
-
+                MessageBox.Show("Усі зміни успішно синхронізовано з Docker БД!", "Успіх", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (DbUpdateException ex)
             {
-                string innerMsg = ex.InnerException?.Message ?? ex.Message;
-                MessageBox.Show($"[DEBUG LOG]:\n{innerMsg}", "Дебаг логу SQL Server");
-                string upperMsg = innerMsg.ToUpper();
-                if (innerMsg.Contains("FOREIGN KEY") || innerMsg.Contains("REFERENCE") || innerMsg.Contains("DELETE statement conflicted"))
-                {
-                    bool isDeleteError = upperMsg.Contains("THE DELETE STATEMENT CONFLICTED");
-                    string customHint = upperMsg switch
-                    {
-                        // 1. Зв'язки з залами (Halls)
-                        var msg when msg.Contains("FK_BARTABLES_HALL_ID") ||
-                                     msg.Contains("FK_SHIFTHALLS_HALL_ID") ||
-                                     msg.Contains("FK_STAFF_HALLS_HALL_ID") => isDeleteError
-                            ? "Неможливо видалити зал! До нього ще прив'язані столи або закріплений персонал."
-                            : "Вказаного [Hall_id] не існує! Спочатку внесіть цей зал у таблицю [Halls].",
+                // Поліморфний виклик нашого кастомного обробника
+                string userFriendlyMessage = ErrorHandler.HandleException(ex);
 
-                        // 2. Зв'язки з категоріями (Увага: тут враховано опечатку "MENUIEMS")
-                        var msg when msg.Contains("FK_MENUIEMS_CATEGORY_ID") => isDeleteError
-                            ? "Неможливо видалити категорію! У ній все ще є страви або напої в меню."
-                            : "Вказаного [Category_id] не існує! Спочатку додайте категорію в таблицю [Categories].",
+                MessageBox.Show(userFriendlyMessage, "Контроль констрейнтів СКБД", MessageBoxButton.OK, MessageBoxImage.Warning);
 
-                        // 3. Зв'язки з позиціями меню (MenuItems)
-                        var msg when msg.Contains("FK_ORDERDETAILS_ITEMS") ||
-                                     msg.Contains("FK_RECIPES_MENUITEM") => isDeleteError
-                            ? "Неможливо видалити позицію меню! Вона вже присутня у чеках замовлень або в рецептах."
-                            : "Вказаного [Item_id] не існує! Такої страви чи напою немає в меню.",
-
-                        // 4. Зв'язки з замовленнями (Orders)
-                        var msg when msg.Contains("FK_ORDERDETAILS_ORDERS") => isDeleteError
-                            ? "Неможливо видалити замовлення, поки всередині нього є додані страви/товари."
-                            : "Вказаного [Order_id] не існує! Неможливо додати деталі до цього замовлення.",
-
-                        // 5. Зв'язки з інгредієнтами (Ingredients)
-                        var msg when msg.Contains("FK_RECIPES_INGREDIENT_ID") => isDeleteError
-                            ? "Неможливо видалити інгредієнт! Він все ще використовується в рецептах технологічних карт."
-                            : "Вказаного [Ingredient_id] не існує! Спочатку додайте його в таблицю [Ingredients].",
-
-                        // 6. Зв'язки з робочими змінами (Shifts)
-                        var msg when msg.Contains("FK_SHIFTHALLS_SHIFT_ID") ||
-                                     msg.Contains("FK_STAFFSHIFTS_SHIFT_ID") => isDeleteError
-                            ? "Неможливо видалити зміну! На неї вже призначені зали або співробітники."
-                            : "Вказаного [Shift_id] не існує! Перевірте правильність ідентифікатора зміни.",
-
-                        // 7. Зв'язки зі співробітниками (Staff)
-                        var msg when msg.Contains("FK_ORDERS_STAFF_ID") ||
-                                     msg.Contains("FK_SHIFTS_STAFF_ID") ||
-                                     msg.Contains("FK_STAFFHALLS_STAFF_ID") ||
-                                     msg.Contains("FK_STAFF_LANGUAGES_STAFF_ID") ||
-                                     msg.Contains("FK_STAFFSHIFTS_STAFF_ID") ||
-                                     msg.Contains("FK_STAFFSPECIALITIES_STAFF_ID") => isDeleteError
-                            ? "Неможливо видалити співробітника! На нього оформлені замовлення, зміни, мови або спеціальності."
-                            : "Вказаного [Staff_id] не існує! Зареєструйте спочатку співробітника в таблицю [Staff].",
-
-                        _ => isDeleteError
-                            ? "Неможливо видалити запис, оскільки на нього посилаються інші структури бази даних."
-                            : "Перевірте правильність введених ідентифікаторів зовнішніх ключів."
-                    };
-
-                    MessageBox.Show($"Помилка цілісності даних\n {customHint}", "Контроль обмежень БД", MessageBoxButton.OK, MessageBoxImage.Hand);
-                }
-                else if (innerMsg.Contains("PRIMARY KEY") || innerMsg.Contains("Violation of UNIQUE KEY") || innerMsg.Contains("Cannot insert duplicate key"))
-                {
-                    MessageBox.Show("Спроба дублювання унікальності ідентифікатора!", "Помилка унікальності ключа", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
-                else
-                {
-                    MessageBox.Show($" Обмеження СКБД:\n{innerMsg}", "Повідомлення бази даних", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
+                // Автоматичний Rollback (код залишається тим самим)
                 RollbackChanges();
             }
-            catch (InvalidOperationException ex)
-            {
-                string msg = ex.Message.ToUpper();
-
-                if (msg.Contains("SEVERED") || msg.Contains("CHILD ENTITY SHOULD BE DELETED"))
-                {
-                    MessageBox.Show("❌ Неможливо видалити або змінити цей запис!\nВін є обов'язковою частиною іншої структури (наприклад, позицією в активному чеку або інгредієнтом у рецепті).\n\nСпочатку видаліть весь зв'язаний документ або налаштуйте каскадне видалення.",
-                                    "Контроль бізнес-логіки", MessageBoxButton.OK, MessageBoxImage.Hand);
-                }
-                else
-                {
-                    MessageBox.Show($"Внутрішня помилка логіки EF:\n{ex.Message}", "Повідомлення системи", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
-                RollbackChanges();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Помилка збереження {ex.Message}", "Помилка СКБД");
-            }
-
         }
+
 
         private void DynamicDataGrid_AutoGeneratingColumn(object sender, DataGridAutoGeneratingColumnEventArgs e)
         {
