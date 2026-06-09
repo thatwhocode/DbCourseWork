@@ -10,23 +10,39 @@ using Microsoft.EntityFrameworkCore;
 namespace BarDbManagmentSystem
 {
     public static  class ErrorHandler
-    {   public static string HandleException(DbUpdateException ex) {
+    {   public static ExceptionResult HandleException(DbUpdateException ex, DbContext context) {
             var failedEntry = ex.Entries.FirstOrDefault();
-            if (failedEntry == null) { return $"Помилка БД{ex.InnerException?.Message ?? ex.Message}"; }
+            if (failedEntry == null) { return new ExceptionResult { ErrorMessage = $"Помилка БД{ex.InnerException?.Message ?? ex.Message}" }; }
             var entity = failedEntry.Entity;
             string entityName = GetEntityDisplayName(entity);
             string SqlError = ex.InnerException?.Message ?? ex.Message;
-
+            var result = new ExceptionResult();
             switch (failedEntry.State)
             {
                 case EntityState.Deleted:
-                    return ResolveDeleteConflict(entityName, SqlError);
+                     result.ErrorMessage = ResolveDeleteConflict(entityName, SqlError);
+                    break;
                 case EntityState.Added:
                 case EntityState.Modified:
-                    return ResolveUpdateConflict(entityName, SqlError);
+                    result.ErrorMessage =  ResolveUpdateConflict(entityName, SqlError);
+                    if (SqlError.ToUpper().Contains("FOREIGN KEY") || SqlError.ToUpper().Contains("REFERENCE")) {
+                            var entityMetadata = context.Model.FindEntityType(entity.GetType());
+                        var brokenForeignKey = entityMetadata?.GetForeignKeys().FirstOrDefault(fk => SqlError.ToUpper().Contains(fk.GetConstraintName().ToUpper()));
+                        if (brokenForeignKey != null) {
+                            var principalEntityType = brokenForeignKey.PrincipalEntityType.ClrType;
+                            result.IdFieldName =  brokenForeignKey.Properties.First().Name;
+                            var dbSetMethod = typeof(DbContext).GetMethod("Set", Type.EmptyTypes).MakeGenericMethod(principalEntityType);
+                            var dbSet = dbSetMethod.Invoke(context, null);
+                            var toListMethod = typeof(Enumerable).GetMethod("ToList").MakeGenericMethod(principalEntityType);
+                            result.ReferenceData = (System.Collections.IEnumerable)toListMethod.Invoke(null, new object[] { dbSet });
+                        }
+                    }
+                    break;
                 default:
-                    return $"Обмеження СКБД заблокувало операцію{SqlError}";
+                     result.ErrorMessage =  $"Обмеження СКБД заблокувало операцію{SqlError}";
+                    break;
             }
+            return result;
         }
 
         private static string ResolveUpdateConflict(string entityName, string sqlError)

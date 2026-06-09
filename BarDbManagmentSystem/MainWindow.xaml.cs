@@ -1,4 +1,6 @@
 ﻿using System.Collections;
+using System.DirectoryServices.ActiveDirectory;
+using System.Net.WebSockets;
 using System.Printing;
 using System.Reflection;
 using System.Text;
@@ -96,13 +98,37 @@ namespace BarDbManagmentSystem
             }
             catch (DbUpdateException ex)
             {
-                // Поліморфний виклик нашого кастомного обробника
-                string userFriendlyMessage = ErrorHandler.HandleException(ex);
+                var resolution = ErrorHandler.HandleException(ex, _context);
+                if (resolution.NeedsAdjustion)
+                {
+                    var failedEntity = ex.Entries.First();
+                    var entity = failedEntity.Entity;
+                    ErrorWindow errWin = new ErrorWindow(resolution.ErrorMessage, resolution.ReferenceData, resolution.IdFieldName, _context);
+                    errWin.Owner = this;
+                    if (errWin.ShowDialog() == true && errWin.selectedId.HasValue)
+                    {
 
-                MessageBox.Show(userFriendlyMessage, "Контроль констрейнтів СКБД", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        var prop = entity.GetType().GetProperty(resolution.IdFieldName);
+                        if (prop != null && prop.CanWrite)
+                        {
+                            prop.SetValue(entity, errWin.selectedId.Value);
+                            DynamicDataGrid.Items.Refresh();
+                            try
+                            {
+                                _context.SaveChanges();
+                                MessageBox.Show("Дані успішно скориговаго і збережено", "Успіх", MessageBoxButton.OK, MessageBoxImage.Information);
+                                return;
+                            }
+                            catch
+                            { }
+                        }
+                    }
 
-                // Автоматичний Rollback (код залишається тим самим)
-                RollbackChanges();
+                }
+                else {
+                    MessageBox.Show(resolution.ErrorMessage, "Порушення обмежень СКБД", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                    RollbackChanges();
             }
         }
 
