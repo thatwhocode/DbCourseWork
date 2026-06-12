@@ -24,7 +24,6 @@ namespace BarDbManagmentSystem
         private Type? _currentModelType;
         private readonly BarDbContext _context;
 
-
         public MainWindow()
         {
 
@@ -50,7 +49,7 @@ namespace BarDbManagmentSystem
             {
                 DynamicDataGrid.ItemsSource = null;
                 var prop = typeof(BarDbContext).GetProperty(tableName);
-
+                _context.ChangeTracker.Clear();
                 _currentDBSet = prop?.GetValue(_context);
                 if (_currentDBSet != null)
                 {
@@ -77,7 +76,7 @@ namespace BarDbManagmentSystem
 
                         var observableCollection = toObservableMethod.Invoke(localValue, null);
 
-                        // Прив'язуємо саме готову ObservableCollection до нашої таблиці
+                        // Прив'язуємо саме готову ObservableCollection до  таблиці
                         DynamicDataGrid.ItemsSource = observableCollection as IEnumerable;
                     }
                 }
@@ -93,53 +92,181 @@ namespace BarDbManagmentSystem
         {
             try
             {
+            
+                DynamicDataGrid.CommitEdit(DataGridEditingUnit.Cell, true);
+                DynamicDataGrid.CommitEdit(DataGridEditingUnit.Row, true);
+
+                if (_currentModelType != null)
+                {
+                    var entityMetadata = _context.Model.FindEntityType(_currentModelType);
+                    var primaryKeyProperties = entityMetadata?.FindPrimaryKey()?.Properties;
+                    bool isCompositeKey = primaryKeyProperties != null && primaryKeyProperties.Count > 1;
+
+                    if (isCompositeKey && DynamicDataGrid.ItemsSource is IList localList)
+                    {
+                        foreach (var item in localList)
+                        {
+                            // Якщо новий об'єкт ще не відстежується трекером — додаємо його як Added
+                            if (_context.Entry(item).State == EntityState.Detached)
+                            {
+                                _context.Entry(item).State = EntityState.Added;
+                            }
+                        }
+                    }
+                }
+
+                // 3. Спроба зберегти (якщо там StaffId = -1,  catch з DbUpdateException)
                 _context.SaveChanges();
                 MessageBox.Show("Усі зміни успішно синхронізовано з Docker БД!", "Успіх", MessageBoxButton.OK, MessageBoxImage.Information);
             }
-            catch (DbUpdateException ex)
+            catch (Exception ex)
             {
-                var resolution = ErrorHandler.HandleException(ex, _context);
-                if (resolution.NeedsAdjustion)
+                if (ex is DbUpdateException dbEx || (ex.InnerException is DbUpdateException innerDbEx && (dbEx = innerDbEx) != null))
                 {
-                    var failedEntity = ex.Entries.First();
-                    var entity = failedEntity.Entity;
-                    ErrorWindow errWin = new ErrorWindow(resolution.ErrorMessage, resolution.ReferenceData, resolution.IdFieldName, _context);
-                    errWin.Owner = this;
-                    if (errWin.ShowDialog() == true && errWin.selectedId.HasValue)
+                    var resolution = ErrorHandler.HandleException(dbEx, _context);
+                    if (resolution.NeedsAdjustion)
                     {
+                        var failedEntity = dbEx.Entries.First().Entity;
 
-                        var prop = entity.GetType().GetProperty(resolution.IdFieldName);
-                        if (prop != null && prop.CanWrite)
+                        ErrorWindow errWin = new ErrorWindow(resolution.ErrorMessage, resolution.ReferenceData, resolution.IdFieldName);
+                        errWin.Owner = this;
+
+                        // Асинхронне створення нової сутності-довідника
+                        errWin.OnRequestSaveReference += async (newObjectToSave) =>
                         {
-                            prop.SetValue(entity, errWin.selectedId.Value);
-                            DynamicDataGrid.Items.Refresh();
+                            using (var tempContext = new BarDbContext())
+                            {
+                                try
+                                {
+                                    var props = newObjectToSave.GetType().GetProperties();
+                                    foreach (var p in props)
+                                    {
+                                        if ((p.PropertyType.IsGenericType && p.PropertyType.GetGenericTypeDefinition() == typeof(System.Collections.Generic.ICollection<>)) ||
+                                            (p.PropertyType.IsClass && p.PropertyType != typeof(string)))
+                                        {
+                                            if (p.CanWrite) p.SetValue(newObjectToSave, null);
+                                        }
+                                    }
+
+                                    tempContext.Add(newObjectToSave);
+                                    var entityMetadata = tempContext.Model.FindEntityType(newObjectToSave.GetType());
+                                    var pkName = entityMetadata?.FindPrimaryKey()?.Properties.FirstOrDefault()?.Name;
+                                    if (pkName != null) tempContext.Entry(newObjectToSave).Property(pkName).IsTemporary = true;
+
+                                    await tempContext.SaveChangesAsync();
+
+                                    var idProp = newObjectToSave.GetType().GetProperty(resolution.IdFieldName);
+                                    if (idProp != null) return Convert.ToInt32(idProp.GetValue(newObjectToSave));
+                                }
+                                catch (Exception tempEx)
+                                {
+                                    MessageBox.Show($"Помилка Docker СУБД:\n{tempEx.Message}", "Помилка СКБД", MessageBoxButton.OK, MessageBoxImage.Error);
+                                }
+                                return null;
+                            }
+                        };
+
+                        if (errWin.ShowDialog() == true && errWin.selectedId.HasValue)
+                        {
                             try
                             {
+                                DynamicDataGrid.CommitEdit(DataGridEditingUnit.Cell, true);
+                                DynamicDataGrid.CommitEdit(DataGridEditingUnit.Row, true);
+
+                                var entityMetadata = _context.Model.FindEntityType(failedEntity.GetType());
+                                var primaryKeyProperties = entityMetadata?.FindPrimaryKey()?.Properties;
+                                bool isCompositeKey = primaryKeyProperties != null && primaryKeyProperties.Count > 1;
+
+                                if (isCompositeKey)
+                                {
+
+                                    var newLinkEntity = Activator.CreateInstance(failedEntity.GetType(), true);
+
+                                    foreach (var prop in failedEntity.GetType().GetProperties())
+                                    {
+                                        if (prop.CanRead && prop.CanWrite && !prop.PropertyType.IsInterface &&
+                                            (!prop.PropertyType.IsClass || prop.PropertyType == typeof(string)))
+                                        {
+                                            prop.SetValue(newLinkEntity, prop.GetValue(failedEntity));
+                                        }
+                                    }
+
+                                    // Виставляємо обраний валідний ID офіціанта
+                                    var targetProp = newLinkEntity.GetType().GetProperty(resolution.IdFieldName);
+                                    targetProp?.SetValue(newLinkEntity, errWin.selectedId.Value);
+
+                                    // Видаляємо старий зламаний рядок із трекера
+                                    _context.Entry(failedEntity).State = EntityState.Detached;
+
+                                    // Оновлюємо UI колекцію
+                                    if (DynamicDataGrid.ItemsSource is IList localList)
+                                    {
+                                        int index = localList.IndexOf(failedEntity);
+                                        if (index >= 0) localList[index] = newLinkEntity;
+                                    }
+
+
+                                    _context.Entry(newLinkEntity).State = EntityState.Added;
+                                    failedEntity = newLinkEntity;
+                                }
+                                else
+                                {
+                                    _context.ChangeTracker.Clear();
+                                    _context.Entry(failedEntity).State = EntityState.Modified;
+                                    _context.Entry(failedEntity).Property(resolution.IdFieldName).CurrentValue = errWin.selectedId.Value;
+                                }
+
+
+                                var otherChangedEntries = _context.ChangeTracker.Entries()
+                                    .Where(x => x.Entity != failedEntity && (x.State == EntityState.Added || x.State == EntityState.Modified))
+                                    .ToList();
+
+                                foreach (var entry in otherChangedEntries) entry.State = EntityState.Unchanged;
+
+                                // Фінальний комміт у Docker
                                 _context.SaveChanges();
-                                MessageBox.Show("Дані успішно скориговаго і збережено", "Успіх", MessageBoxButton.OK, MessageBoxImage.Information);
+
+                                foreach (var entry in otherChangedEntries) entry.State = EntityState.Added;
+
+                                var collectionView = CollectionViewSource.GetDefaultView(DynamicDataGrid.ItemsSource);
+                                collectionView?.Refresh();
+
+                                MessageBox.Show("Дані успішно скориговано і збережено в Docker!", "Успіх", MessageBoxButton.OK, MessageBoxImage.Information);
                                 return;
                             }
-                            catch
-                            { }
+                            catch (Exception saveEx)
+                            {
+                                var errText = saveEx.InnerException?.Message ?? saveEx.Message;
+                                MessageBox.Show($"Не вдалося виконати фінальний запис: {errText}", "Конфлікт", MessageBoxButton.OK, MessageBoxImage.Error);
+                            }
                         }
+                        RollbackChanges();
                     }
-
+                    else
+                    {
+                        MessageBox.Show(resolution.ErrorMessage, "Порушення обмежень СКБД", MessageBoxButton.OK, MessageBoxImage.Error);
+                        RollbackChanges();
+                    }
                 }
-                else {
-                    MessageBox.Show(resolution.ErrorMessage, "Порушення обмежень СКБД", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
+                else
+                {
+                    // Якщо це інша помилка (наприклад, InvalidOperation через трекер ключів)
+                    var realMessage = ex.InnerException?.Message ?? ex.Message;
+                    MessageBox.Show($"Помилка валідації сутності трекером EF Core:\n{realMessage}", "Помилка", MessageBoxButton.OK, MessageBoxImage.Error);
                     RollbackChanges();
+                }
             }
         }
 
 
         private void DynamicDataGrid_AutoGeneratingColumn(object sender, DataGridAutoGeneratingColumnEventArgs e)
         {
-            if ((e.PropertyType.IsClass && e.PropertyType != typeof(string)) ||
-            typeof(System.Collections.IEnumerable).IsAssignableFrom(e.PropertyType) && e.PropertyType != typeof(string))
+            if (e.PropertyName == "DisplayName" ||
+        e.PropertyName.EndsWith("Details") ||
+        (e.PropertyType.IsClass && e.PropertyType != typeof(string)) ||
+        (typeof(System.Collections.IEnumerable).IsAssignableFrom(e.PropertyType) && e.PropertyType != typeof(string)))
             {
-
-                e.Cancel = true;
+                e.Cancel = true; 
             }
         }
 
@@ -152,23 +279,72 @@ namespace BarDbManagmentSystem
             }
             try
             {
-                var newEntity = Activator.CreateInstance(_currentModelType);
+                var newEntity = Activator.CreateInstance(_currentModelType, true);
+                if (newEntity == null) return;
 
-                var AddMethod = _currentDBSet.GetType().GetMethod("Add", new[] { _currentModelType });
-                AddMethod?.Invoke(_currentDBSet, new[] { newEntity });
+                var entityMetadata = _context.Model.FindEntityType(_currentModelType);
+                var primaryKeyProperties = entityMetadata?.FindPrimaryKey()?.Properties;
+                bool isCompositeKey = primaryKeyProperties != null && primaryKeyProperties.Count > 1;
+
+                if (primaryKeyProperties != null)
+                {
+                    foreach (var pkProp in primaryKeyProperties)
+                    {
+                        if (!isCompositeKey)
+                        {
+                            if (pkProp.ClrType == typeof(int) || pkProp.ClrType == typeof(long))
+                            {
+                                _context.Entry(newEntity).Property(pkProp.Name).IsTemporary = true;
+                            }
+                        }
+                        else
+                        {
+                            var propInfo = newEntity.GetType().GetProperty(pkProp.Name);
+                            if (propInfo != null && propInfo.CanWrite)
+                            {
+                                if (pkProp.ClrType == typeof(string))
+                                {
+                                    propInfo.SetValue(newEntity, string.Empty);
+                                }
+                                else if (pkProp.ClrType == typeof(int) || pkProp.ClrType == typeof(long))
+                                {
+                                    propInfo.SetValue(newEntity, -1); // Тимчасовий ID
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (isCompositeKey)
+                {
+                    if (DynamicDataGrid.ItemsSource is IList localList)
+                    {
+                        localList.Add(newEntity);
+                    }
+                }
+                else
+                {
+                    _context.Entry(newEntity).State = EntityState.Added;
+                }
+
                 DynamicDataGrid.ScrollIntoView(newEntity);
                 DynamicDataGrid.SelectedItem = newEntity;
                 DynamicDataGrid.UpdateLayout();
-                var cell = DynamicDataGrid.Columns[0].GetCellContent(newEntity)?.Parent as DataGridCell;
-                cell?.Focus();
 
+                int targetColumnIndex = isCompositeKey ? 0 : (DynamicDataGrid.Columns.Count > 1 ? 1 : 0);
+                if (DynamicDataGrid.Columns.Count > targetColumnIndex)
+                {
+                    var cell = DynamicDataGrid.Columns[targetColumnIndex].GetCellContent(newEntity)?.Parent as DataGridCell;
+                    cell?.Focus();
+                    DynamicDataGrid.BeginEdit();
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Не вдалося створити рядок: {ex.Message}");
+                var realErr = ex.InnerException?.Message ?? ex.Message;
+                MessageBox.Show($"Не вдалося створити рядок:\n{realErr}", "Помилка", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
-
         private void DeleteRowClick(object sender, RoutedEventArgs e)
         {
             var selectedItem = DynamicDataGrid.SelectedItem;
